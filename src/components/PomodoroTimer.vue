@@ -116,6 +116,17 @@ watch(currentTask, (newTask, oldTask) => {
     // 任务切换时重置计时器
     resetTimer()
   }
+  // 如果切换到新任务，更新已完成分钟数显示和专注时长
+  if (newTask) {
+    completedMinutes.value = newTask.completedMinutes || 0
+    // 将专注时长设置为任务的预估时长
+    workTimeMinutes.value = newTask.estimatedMinutes
+    workTime = computed(() => workTimeMinutes.value * 60)
+    // 如果计时器未运行，更新时间显示
+    if (!isRunning.value) {
+      timeLeft.value = workTime.value
+    }
+  }
 })
 
 // 监听任务完成状态
@@ -219,6 +230,11 @@ const toggleTimer = () => {
           // 计算完成的分钟数
           const completedWorkMinutes = workTimeMinutes.value
           completedMinutes.value += completedWorkMinutes
+          
+          // 更新任务的完成分钟数
+          if (currentTask.value) {
+            taskStore.updateCompletedMinutes(currentTask.value.id, completedMinutes.value)
+          }
           
           // 检查是否完成任务
           if (currentTask.value && completedMinutes.value >= currentTask.value.estimatedMinutes) {

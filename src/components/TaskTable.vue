@@ -44,15 +44,15 @@
       </template>
     </el-table-column>
     
-    <el-table-column label="番茄钟进度" width="150">
+    <el-table-column label="任务进度" width="150">
       <template #default="{ row }">
         <el-progress 
-          :percentage="getPomodoroPercentage(row)"
+          :percentage="getTaskProgressPercentage(row)"
           :format="format"
           :stroke-width="8"
         />
-        <div class="pomodoro-count">
-          {{ row.completedPomodoros }} / {{ Math.ceil(row.estimatedMinutes / 25) }}
+        <div class="progress-text">
+          {{ formatDuration(row.completedMinutes || 0) }} / {{ formatDuration(row.estimatedMinutes) }}
         </div>
       </template>
     </el-table-column>
@@ -205,10 +205,10 @@ const formatTime = (timeString: string) => {
   })
 }
 
-const getPomodoroPercentage = (task: Task) => {
-  const totalPomodoros = Math.ceil(task.estimatedMinutes / 25)
-  if (totalPomodoros === 0) return 0
-  return (task.completedPomodoros / totalPomodoros) * 100
+const getTaskProgressPercentage = (task: Task) => {
+  if (task.estimatedMinutes === 0) return 0
+  const completed = task.completedMinutes || 0
+  return Math.min((completed / task.estimatedMinutes) * 100, 100)
 }
 
 const selectTask = (id: number) => {
@@ -308,10 +308,11 @@ const saveSchedule = () => {
   font-style: italic;
 }
 
-.pomodoro-count {
+.progress-text {
   font-size: 0.75rem;
   color: #606266;
   margin-top: 0.25rem;
+  text-align: center;
 }
 
 .action-buttons {

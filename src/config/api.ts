@@ -1,7 +1,7 @@
 // DeepSeek API配置
 export const DEEPSEEK_CONFIG = {
   // 请替换为您的实际API密钥和端点
-  API_KEY: import.meta.env.VITE_DEEPSEEK_API_KEY || 'your-api-key-here',
+  API_KEY: import.meta.env.VITE_DEEPSEEK_API_KEY || 'sk-fdb1b3d072694d0caec24e397c24aff8',
   API_ENDPOINT: import.meta.env.VITE_DEEPSEEK_API_ENDPOINT || 'https://api.deepseek.com/v1/chat/completions',
   MODEL: 'deepseek-chat',
   TEMPERATURE: 0.1,

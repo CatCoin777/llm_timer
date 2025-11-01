@@ -13,7 +13,8 @@ export interface Task {
   fromAgent?: boolean            // 是否由智能Agent安排
   isMultiDay?: boolean           // 是否为跨天任务
   createdAt: Date
-  completedPomodoros: number     // 已完成的番茄钟数量
+  completedPomodoros: number     // 已完成的番茄钟数量（保留以兼容旧数据）
+  completedMinutes: number        // 已完成的分钟数
 }
 
 export const useTaskStore = defineStore('task', {
@@ -44,7 +45,8 @@ export const useTaskStore = defineStore('task', {
         priority,
         isCompleted: false,
         createdAt: new Date(),
-        completedPomodoros: 0
+        completedPomodoros: 0,
+        completedMinutes: 0
       }
       this.tasks.push(task)
       this.saveToLocalStorage()
@@ -71,6 +73,19 @@ export const useTaskStore = defineStore('task', {
       const task = this.tasks.find(task => task.id === id)
       if (task) {
         task.completedPomodoros++
+        this.saveToLocalStorage()
+      }
+    },
+
+    // 更新任务完成的分钟数
+    updateCompletedMinutes(id: number, minutes: number) {
+      const task = this.tasks.find(task => task.id === id)
+      if (task) {
+        task.completedMinutes = Math.min(minutes, task.estimatedMinutes)
+        // 如果完成的分钟数达到或超过预估时长，标记为完成
+        if (task.completedMinutes >= task.estimatedMinutes && !task.isCompleted) {
+          task.isCompleted = true
+        }
         this.saveToLocalStorage()
       }
     },
@@ -133,7 +148,17 @@ export const useTaskStore = defineStore('task', {
 
     // 使用DeepSeek API解析自然语言
     async parseWithDeepSeek(input: string) {
+      const now = dayjs()
+      const currentDate = now.format('YYYY-MM-DD')
+      const currentTime = now.format('HH:mm')
+      const tomorrowDate = now.add(1, 'day').format('YYYY-MM-DD')
+      
       const prompt = `你是一个智能任务解析助手。请将用户的自然语言输入解析为结构化的任务信息。
+
+当前日期和时间：
+- 当前日期：${currentDate}
+- 当前时间：${currentTime}
+- 明天日期：${tomorrowDate}
 
 用户输入：${input}
 
@@ -145,34 +170,40 @@ export const useTaskStore = defineStore('task', {
 - endTime: 结束时间（YYYY-MM-DD HH:mm格式，如果用户指定了具体时间）
 
 注意事项：
-1. 如果用户说"明天"，请计算明天的日期
-2. 如果用户说"上午"，默认时间为9:00-12:00之间
-3. 如果用户说"下午"，默认时间为14:00-18:00之间
-4. 如果用户说"晚上"，默认时间为19:00-22:00之间
+1. 必须使用当前日期和明天日期来计算相对时间：
+   - "今天" = ${currentDate}
+   - "明天" = ${tomorrowDate}
+   - "后天" = ${now.add(2, 'day').format('YYYY-MM-DD')}
+2. 如果用户说"上午"，默认时间为9:00-12:00之间，建议从09:00或10:00开始
+3. 如果用户说"下午"，默认时间为14:00-18:00之间，建议从14:00或15:00开始
+4. 如果用户说"晚上"，默认时间为19:00-22:00之间，建议从19:00或20:00开始
 5. 如果用户没有指定具体时间，startTime和endTime字段留空
-6. 优先级根据任务重要性判断，包含"重要"、"紧急"等关键词的设为"高"
+6. 优先级根据任务重要性判断，包含"重要"、"紧急"、"高优先级"等关键词的设为"高"
+7. 结束时间 = 开始时间 + estimatedMinutes
 
-示例输出：
+示例输出（假设当前日期是${currentDate}）：
 [
   {
     "title": "开会",
     "estimatedMinutes": 120,
     "priority": "高",
-    "startTime": "2024-06-19 09:00",
-    "endTime": "2024-06-19 11:00"
+    "startTime": "${tomorrowDate} 09:00",
+    "endTime": "${tomorrowDate} 11:00"
   },
   {
     "title": "写报告",
     "estimatedMinutes": 60,
     "priority": "中",
-    "startTime": "2024-06-19 14:00",
-    "endTime": "2024-06-19 15:00"
+    "startTime": "${tomorrowDate} 14:00",
+    "endTime": "${tomorrowDate} 15:00"
   }
 ]
 
-请只返回JSON格式的数据，不要包含其他文字。`
+请只返回JSON格式的数据，不要包含其他文字。务必使用正确的当前日期和明天日期。`
 
       try {
+        let tasks: any[] = []
+        
         if (isApiConfigured()) {
           // 使用真实的DeepSeek API
           const response = await fetch(DEEPSEEK_CONFIG.API_ENDPOINT, {
@@ -199,8 +230,7 @@ export const useTaskStore = defineStore('task', {
           // 解析JSON响应
           const jsonMatch = content.match(/\[[\s\S]*\]/)
           if (jsonMatch) {
-            const tasks = JSON.parse(jsonMatch[0])
-            return tasks
+            tasks = JSON.parse(jsonMatch[0])
           }
         } else {
           // 如果API未配置，使用模拟响应
@@ -211,12 +241,16 @@ export const useTaskStore = defineStore('task', {
           // 解析JSON响应
           const jsonMatch = content.match(/\[[\s\S]*\]/)
           if (jsonMatch) {
-            const tasks = JSON.parse(jsonMatch[0])
-            return tasks
+            tasks = JSON.parse(jsonMatch[0])
           }
         }
         
-        return null
+        // 对返回的任务进行日期验证和修正
+        if (tasks && tasks.length > 0) {
+          tasks = this.validateAndCorrectDates(tasks, input)
+        }
+        
+        return tasks.length > 0 ? tasks : null
       } catch (error) {
         console.error('DeepSeek API调用失败:', error)
         // 如果API调用失败，回退到模拟响应
@@ -225,63 +259,141 @@ export const useTaskStore = defineStore('task', {
         
         const jsonMatch = content.match(/\[[\s\S]*\]/)
         if (jsonMatch) {
-          const tasks = JSON.parse(jsonMatch[0])
-          return tasks
+          let tasks = JSON.parse(jsonMatch[0])
+          tasks = this.validateAndCorrectDates(tasks, input)
+          return tasks.length > 0 ? tasks : null
         }
         
         throw error
       }
     },
 
+    // 验证和修正日期
+    validateAndCorrectDates(tasks: any[], originalInput: string) {
+      const now = dayjs()
+      const today = now.format('YYYY-MM-DD')
+      const tomorrow = now.add(1, 'day').format('YYYY-MM-DD')
+      
+      return tasks.map(task => {
+        // 如果任务有开始时间和结束时间，进行验证和修正
+        if (task.startTime && task.endTime) {
+          const startTime = dayjs(task.startTime)
+          
+          // 检查是否解析出了有效的日期
+          if (!startTime.isValid()) {
+            // 如果日期无效，尝试从原始输入中推断
+            const correctedDates = this.inferDatesFromInput(originalInput, task.estimatedMinutes)
+            if (correctedDates) {
+              task.startTime = correctedDates.startTime
+              task.endTime = correctedDates.endTime
+            } else {
+              // 如果无法推断，清空时间，让系统自动排期
+              task.startTime = ''
+              task.endTime = ''
+            }
+          } else {
+            // 日期有效，检查是否需要修正
+            // 如果用户说"明天"但日期不是明天，进行修正
+            if (originalInput.includes('明天') || originalInput.includes('明日')) {
+              const expectedDate = tomorrow
+              const actualDate = startTime.format('YYYY-MM-DD')
+              if (actualDate !== expectedDate) {
+                const timeStr = startTime.format('HH:mm')
+                task.startTime = `${expectedDate} ${timeStr}`
+                task.endTime = dayjs(task.startTime).add(task.estimatedMinutes, 'minute').format('YYYY-MM-DD HH:mm')
+              }
+            } else if (originalInput.includes('今天') || originalInput.includes('今日')) {
+              const expectedDate = today
+              const actualDate = startTime.format('YYYY-MM-DD')
+              if (actualDate !== expectedDate && !actualDate.includes(expectedDate)) {
+                const timeStr = startTime.format('HH:mm')
+                task.startTime = `${expectedDate} ${timeStr}`
+                task.endTime = dayjs(task.startTime).add(task.estimatedMinutes, 'minute').format('YYYY-MM-DD HH:mm')
+              }
+            }
+          }
+        }
+        
+        return task
+      })
+    },
+
+    // 从输入中推断日期
+    inferDatesFromInput(input: string, estimatedMinutes: number) {
+      const now = dayjs()
+      const today = now.format('YYYY-MM-DD')
+      const tomorrow = now.add(1, 'day').format('YYYY-MM-DD')
+      
+      let targetDate = today
+      let targetTime = '09:00'
+      
+      // 判断日期
+      if (input.includes('明天') || input.includes('明日')) {
+        targetDate = tomorrow
+      } else if (input.includes('后天')) {
+        targetDate = now.add(2, 'day').format('YYYY-MM-DD')
+      } else if (input.includes('今天') || input.includes('今日')) {
+        targetDate = today
+      }
+      
+      // 判断时间段
+      if (input.includes('上午') || input.includes('早上') || input.includes('早')) {
+        targetTime = '09:00'
+      } else if (input.includes('下午')) {
+        targetTime = '14:00'
+      } else if (input.includes('晚上') || input.includes('傍晚')) {
+        targetTime = '19:00'
+      } else if (input.includes('中午')) {
+        targetTime = '12:00'
+      }
+      
+      const startTime = dayjs(`${targetDate} ${targetTime}`)
+      const endTime = startTime.add(estimatedMinutes, 'minute')
+      
+      return {
+        startTime: startTime.format('YYYY-MM-DD HH:mm'),
+        endTime: endTime.format('YYYY-MM-DD HH:mm')
+      }
+    },
+
     // 模拟DeepSeek API响应（临时使用）
     mockDeepSeekResponse(input: string) {
-      const now = dayjs()
-      const tomorrow = now.add(1, 'day')
+      // 尝试解析多个任务（用逗号或"和"分隔）
+      const tasks: any[] = []
+      const taskParts = input.split(/[，,和、]/).map(s => s.trim()).filter(s => s)
       
-      if (input.includes('明天上午开会2小时') && input.includes('下午写报告1小时')) {
-        return JSON.stringify([
-          {
-            "title": "开会",
-            "estimatedMinutes": 120,
-            "priority": "高",
-            "startTime": `${tomorrow.format('YYYY-MM-DD')} 09:00`,
-            "endTime": `${tomorrow.format('YYYY-MM-DD')} 11:00`
-          },
-          {
-            "title": "写报告",
-            "estimatedMinutes": 60,
-            "priority": "中",
-            "startTime": `${tomorrow.format('YYYY-MM-DD')} 14:00`,
-            "endTime": `${tomorrow.format('YYYY-MM-DD')} 15:00`
-          }
-        ])
+      for (const part of taskParts) {
+        const parsed = this.simpleParseNaturalLanguage(part)
+        if (parsed) {
+          // 尝试推断日期和时间
+          const dates = this.inferDatesFromInput(part, parsed.estimatedMinutes)
+          
+          tasks.push({
+            "title": parsed.title,
+            "estimatedMinutes": parsed.estimatedMinutes,
+            "priority": parsed.priority,
+            "startTime": dates ? dates.startTime : "",
+            "endTime": dates ? dates.endTime : ""
+          })
+        }
       }
       
-      if (input.includes('明天上午读书1小时')) {
-        return JSON.stringify([
-          {
-            "title": "读书",
-            "estimatedMinutes": 60,
-            "priority": "中",
-            "startTime": `${tomorrow.format('YYYY-MM-DD')} 09:00`,
-            "endTime": `${tomorrow.format('YYYY-MM-DD')} 10:00`
-          }
-        ])
+      // 如果没有解析出任务，尝试整体解析
+      if (tasks.length === 0) {
+        const parsed = this.simpleParseNaturalLanguage(input)
+        if (parsed) {
+          const dates = this.inferDatesFromInput(input, parsed.estimatedMinutes)
+          tasks.push({
+            "title": parsed.title,
+            "estimatedMinutes": parsed.estimatedMinutes,
+            "priority": parsed.priority,
+            "startTime": dates ? dates.startTime : "",
+            "endTime": dates ? dates.endTime : ""
+          })
+        }
       }
       
-      // 默认解析
-      const parsed = this.simpleParseNaturalLanguage(input)
-      if (parsed) {
-        return JSON.stringify([{
-          "title": parsed.title,
-          "estimatedMinutes": parsed.estimatedMinutes,
-          "priority": parsed.priority,
-          "startTime": "",
-          "endTime": ""
-        }])
-      }
-      
-      return JSON.stringify([])
+      return JSON.stringify(tasks)
     },
 
     // 为单个任务进行智能排期
@@ -416,15 +528,27 @@ export const useTaskStore = defineStore('task', {
         priority = '低'
       }
 
-      // 提取任务标题（移除时间相关词汇）
+      // 提取任务标题（移除时间相关词汇，但保留任务描述）
       let title = input
         .replace(/\d+\s*小时/g, '')
         .replace(/\d+\s*分钟/g, '')
         .replace(/重要|紧急|高优先级|一般|普通|低优先级|不紧急/g, '')
+        .replace(/明天|今天|后天|上午|下午|晚上|早上|早|中午|傍晚/g, '')
+        .replace(/（.*?）/g, '') // 移除括号中的内容
+        .replace(/\(.*?\)/g, '') // 移除英文括号中的内容
         .replace(/\s+/g, ' ')
         .trim()
 
-      if (title) {
+      // 如果标题为空，尝试提取核心动词+名词
+      if (!title || title.length < 2) {
+        // 尝试从输入中提取主要动作
+        const actionMatch = input.match(/(安排|写|读|开|做|完成|进行)(.{0,10})/)
+        if (actionMatch) {
+          title = actionMatch[0].replace(/\d+|\s*小时|\s*分钟|重要|紧急|高优先级|明天|今天|后天|上午|下午|晚上/g, '').trim()
+        }
+      }
+
+      if (title && title.length >= 2) {
         return { title, estimatedMinutes, priority }
       }
       return null
@@ -518,7 +642,9 @@ export const useTaskStore = defineStore('task', {
       if (tasks) {
         this.tasks = JSON.parse(tasks).map((task: any) => ({
           ...task,
-          createdAt: new Date(task.createdAt)
+          createdAt: new Date(task.createdAt),
+          // 兼容旧数据：如果没有 completedMinutes，根据 completedPomodoros 计算或设为 0
+          completedMinutes: task.completedMinutes !== undefined ? task.completedMinutes : (task.completedPomodoros || 0) * 25
         }))
       }
       

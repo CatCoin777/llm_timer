@@ -67,8 +67,13 @@
           <span>{{ formatDateTime(selectedTask.endTime) }}</span>
         </div>
         <div class="detail-item">
-          <label>番茄钟进度：</label>
-          <span>{{ selectedTask.completedPomodoros }} / {{ Math.ceil(selectedTask.estimatedMinutes / 25) }}</span>
+          <label>任务进度：</label>
+          <span>{{ formatDuration(selectedTask.completedMinutes || 0) }} / {{ formatDuration(selectedTask.estimatedMinutes) }}</span>
+          <el-progress 
+            :percentage="getTaskProgressPercentage(selectedTask)"
+            :stroke-width="8"
+            style="margin-top: 0.5rem;"
+          />
         </div>
         <div class="detail-item">
           <label>状态：</label>
@@ -167,6 +172,12 @@ const formatDuration = (minutes: number) => {
       return `${hours}小时${remainingMinutes}分钟`
     }
   }
+}
+
+const getTaskProgressPercentage = (task: Task) => {
+  if (task.estimatedMinutes === 0) return 0
+  const completed = task.completedMinutes || 0
+  return Math.min((completed / task.estimatedMinutes) * 100, 100)
 }
 
 const formatDateTime = (timeString: string | undefined) => {
